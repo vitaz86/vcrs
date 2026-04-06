@@ -1,0 +1,25 @@
+{
+  "startup_enabled": false,
+  "rules": [
+    {
+      "name": "Zoom",
+      "source_folder": "C:/Users/User/Documents/Zoom",
+      "destination_folder": "C:/Users/User/Yandex.Disk/VKS Recordings/Zoom",
+      "extensions": [".mp4", ".m4a"],
+      "move_mode": "wait_for_stable",
+      "delete_source_folder": true,
+      "delete_delay_seconds": 60,
+      "enabled": true
+    },
+    {
+      "name": "Telemost",
+      "source_folder": "C:/Users/User/Documents/Telemost",
+      "destination_folder": "C:/Users/User/Dropbox/VKS Recordings/Telemost",
+      "extensions": [".webm"],
+      "move_mode": "immediate",
+      "delete_source_folder": true,
+      "delete_delay_seconds": 60,
+      "enabled": true
+    }
+  ]
+}

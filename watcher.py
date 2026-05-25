@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -55,22 +58,31 @@ class SourceRootHandler(FileSystemEventHandler):
 
 
 class WatcherManager:
-    def __init__(self, logger: logging.Logger, on_move_callback=None):
+    def __init__(self, logger: logging.Logger, zoom_conversion_timeout_seconds: int = 1200, on_move_callback=None):
         self.logger = logger
+        self.zoom_conversion_timeout_seconds = zoom_conversion_timeout_seconds
         self.on_move_callback = on_move_callback
         self.observers: list[Observer] = []
         self.rule_states: dict[str, RuleState] = {}
         self.paused = False
+        self.rules: list[WatcherRule] = []
+        self.health_thread: threading.Thread | None = None
+        self._stop_health = threading.Event()
 
     def start(self, rules: list[WatcherRule]) -> None:
         self.stop()
         self.paused = False
-        active_rules = [rule for rule in rules if rule.enabled]
-        for rule in active_rules:
+        self.rules = rules
+        for rule in [r for r in rules if r.enabled]:
             self._start_rule(rule)
             self._scan_existing_subdirs(rule)
+        self._start_health_monitor()
 
     def stop(self) -> None:
+        self._stop_health.set()
+        if self.health_thread and self.health_thread.is_alive():
+            self.health_thread.join(timeout=2)
+        self.health_thread = None
         for observer in self.observers:
             observer.stop()
         for observer in self.observers:
@@ -84,12 +96,26 @@ class WatcherManager:
     def resume(self, rules: list[WatcherRule]) -> None:
         self.start(rules)
 
+    def _start_health_monitor(self) -> None:
+        self._stop_health.clear()
+        self.health_thread = threading.Thread(target=self._health_worker, daemon=True)
+        self.health_thread.start()
+
+    def _health_worker(self) -> None:
+        while not self._stop_health.wait(60):
+            if self.paused:
+                continue
+            dead = [obs for obs in self.observers if not obs.is_alive()]
+            if dead:
+                self.logger.warning("Observer health check detected %s dead observers, restarting", len(dead))
+                self.start(self.rules)
+                return
+
     def _start_rule(self, rule: WatcherRule) -> None:
         source = Path(rule.source_folder)
         if not source.exists() or not source.is_dir():
             self.logger.warning("Rule=%s source folder not available: %s", rule.name, source)
             return
-
         self.rule_states[rule.name] = RuleState()
         observer = Observer()
         observer.schedule(SourceRootHandler(self, rule), str(source), recursive=False)
@@ -98,23 +124,22 @@ class WatcherManager:
         self.logger.info("Rule=%s watching source root: %s", rule.name, source)
 
     def _scan_existing_subdirs(self, rule: WatcherRule) -> None:
-        source = Path(rule.source_folder)
         try:
-            for child in source.iterdir():
+            for child in Path(rule.source_folder).iterdir():
                 if child.is_dir():
                     self.handle_new_subdir(rule, child)
         except (PermissionError, FileNotFoundError) as exc:
-            self.logger.error("Rule=%s scan error for %s: %s", rule.name, source, exc)
+            self.logger.error("Rule=%s scan error: %s", rule.name, exc)
 
     def handle_new_subdir(self, rule: WatcherRule, source_subdir: Path) -> None:
         if self.paused:
             return
-        destination_subdir = Path(rule.destination_folder) / source_subdir.name
+        dst_subdir = Path(rule.destination_folder) / source_subdir.name
         try:
-            destination_subdir.mkdir(parents=True, exist_ok=True)
-            self.logger.info("Rule=%s folder detected: %s -> %s", rule.name, source_subdir, destination_subdir)
+            dst_subdir.mkdir(parents=True, exist_ok=True)
+            self.logger.info("Rule=%s folder detected: %s -> %s", rule.name, source_subdir, dst_subdir)
         except (PermissionError, OSError) as exc:
-            self.logger.error("Rule=%s cannot create destination dir %s: %s", rule.name, destination_subdir, exc)
+            self.logger.error("Rule=%s cannot create destination dir %s: %s", rule.name, dst_subdir, exc)
             return
 
         observer = Observer()
@@ -122,6 +147,7 @@ class WatcherManager:
         observer.start()
         self.observers.append(observer)
 
+        self._schedule_zoom_conversion_if_needed(rule, source_subdir)
         try:
             for item in source_subdir.iterdir():
                 if item.is_file():
@@ -129,42 +155,62 @@ class WatcherManager:
         except (PermissionError, FileNotFoundError) as exc:
             self.logger.error("Rule=%s cannot read subdir %s: %s", rule.name, source_subdir, exc)
 
+    def _schedule_zoom_conversion_if_needed(self, rule: WatcherRule, source_subdir: Path) -> None:
+        if rule.move_mode != "wait_for_stable":
+            return
+        threading.Thread(target=self._zoom_conversion_worker, args=(rule, source_subdir), daemon=True).start()
+
+    def _zoom_conversion_worker(self, rule: WatcherRule, source_subdir: Path) -> None:
+        time.sleep(self.zoom_conversion_timeout_seconds)
+        if not source_subdir.exists():
+            return
+        zoom_files = sorted(source_subdir.glob("*.zoom"))
+        output_files = [p for p in source_subdir.iterdir() if p.is_file() and p.suffix.lower() in {".mp4", ".m4a"}]
+        if not zoom_files or output_files:
+            return
+        launcher = source_subdir / "double_click_to_convert_01.zoom"
+        target = launcher if launcher.exists() else zoom_files[0]
+        try:
+            self._open_file(target)
+            self.logger.info("Rule=%s forced zoom conversion launch: %s", rule.name, target)
+        except (OSError, subprocess.SubprocessError) as exc:
+            self.logger.error("Rule=%s failed to launch zoom conversion file %s: %s", rule.name, target, exc)
+
+    def _open_file(self, path: Path) -> None:
+        if sys.platform.startswith("win"):
+            os.startfile(str(path))
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(path)], check=True)
+        else:
+            subprocess.run(["xdg-open", str(path)], check=True)
+
     def handle_file_candidate(self, rule: WatcherRule, file_path: Path, source_subdir: Path) -> None:
         if self.paused or not file_path.exists() or not file_path.is_file():
             return
-        if file_path.suffix.lower() not in {ext.lower() for ext in rule.extensions}:
+        if file_path.suffix.lower() not in {e.lower() for e in rule.extensions}:
             return
-
         state = self.rule_states.setdefault(rule.name, RuleState())
         with state.lock:
             if file_path in state.in_progress or file_path in state.moved_files:
                 return
             state.in_progress.add(file_path)
-
-        thread = threading.Thread(
-            target=self._process_file,
-            args=(rule, file_path, source_subdir),
-            daemon=True,
-        )
-        thread.start()
+        threading.Thread(target=self._process_file, args=(rule, file_path, source_subdir), daemon=True).start()
 
     def _process_file(self, rule: WatcherRule, file_path: Path, source_subdir: Path) -> None:
         state = self.rule_states.setdefault(rule.name, RuleState())
         try:
             self.logger.info("Rule=%s file detected: %s", rule.name, file_path)
-            stable = wait_until_stable(str(file_path))
-            if not stable:
+            if not wait_until_stable(str(file_path)):
                 self.logger.warning("Rule=%s stability timeout: %s", rule.name, file_path)
                 return
             self.logger.info("Rule=%s file stable: %s", rule.name, file_path)
-
-            destination = Path(rule.destination_folder) / source_subdir.name / file_path.name
-            if self._move_with_retry(rule, file_path, destination):
+            dst = Path(rule.destination_folder) / source_subdir.name / file_path.name
+            if self._move_with_retry(rule, file_path, dst):
                 with state.lock:
                     state.moved_files.add(file_path)
                 if self.on_move_callback:
                     self.on_move_callback()
-                self.logger.info("Rule=%s file moved: %s -> %s", rule.name, file_path, destination)
+                self.logger.info("Rule=%s file moved: %s -> %s", rule.name, file_path, dst)
                 self._schedule_delete_if_done(rule, source_subdir)
         finally:
             with state.lock:
@@ -184,22 +230,17 @@ class WatcherManager:
         return False
 
     def _schedule_delete_if_done(self, rule: WatcherRule, source_subdir: Path) -> None:
-        if not rule.delete_source_folder:
-            return
-        thread = threading.Thread(target=self._delete_if_done_worker, args=(rule, source_subdir), daemon=True)
-        thread.start()
+        if rule.delete_source_folder:
+            threading.Thread(target=self._delete_if_done_worker, args=(rule, source_subdir), daemon=True).start()
 
     def _delete_if_done_worker(self, rule: WatcherRule, source_subdir: Path) -> None:
         try:
-            pending = [
-                p for p in source_subdir.iterdir() if p.is_file() and p.suffix.lower() in {ext.lower() for ext in rule.extensions}
-            ]
+            exts = {e.lower() for e in rule.extensions}
+            pending = [p for p in source_subdir.iterdir() if p.is_file() and p.suffix.lower() in exts]
             if pending:
                 return
             time.sleep(rule.delete_delay_seconds)
-            pending_after = [
-                p for p in source_subdir.iterdir() if p.is_file() and p.suffix.lower() in {ext.lower() for ext in rule.extensions}
-            ]
+            pending_after = [p for p in source_subdir.iterdir() if p.is_file() and p.suffix.lower() in exts]
             if pending_after:
                 return
             shutil.rmtree(source_subdir)

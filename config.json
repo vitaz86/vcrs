@@ -1,25 +1,37 @@
 {
   "startup_enabled": false,
+  "language": "en",
+  "zoom_conversion_timeout_seconds": 1200,
   "rules": [
     {
       "name": "Zoom",
-      "source_folder": "C:/Users/User/Documents/Zoom",
-      "destination_folder": "C:/Users/User/Yandex.Disk/VKS Recordings/Zoom",
+      "source_folder": "C:\\Users\\User\\Documents\\Zoom",
+      "destination_folder": "C:\\Users\\User\\Yandex.Disk\\VKS Recordings\\Zoom",
       "extensions": [".mp4", ".m4a"],
       "move_mode": "wait_for_stable",
       "delete_source_folder": true,
       "delete_delay_seconds": 60,
-      "enabled": true
+      "enabled": false
     },
     {
       "name": "Telemost",
-      "source_folder": "C:/Users/User/Documents/Telemost",
-      "destination_folder": "C:/Users/User/Yandex.Disk/VKS Recordings/Telemost",
+      "source_folder": "C:\\Users\\User\\Documents\\Telemost",
+      "destination_folder": "C:\\Users\\User\\Yandex.Disk\\VKS Recordings\\Telemost",
       "extensions": [".webm"],
       "move_mode": "immediate",
       "delete_source_folder": true,
       "delete_delay_seconds": 60,
-      "enabled": true
+      "enabled": false
+    },
+    {
+      "name": "Kontur Talk",
+      "source_folder": "C:\\Users\\User\\Documents\\KTalk",
+      "destination_folder": "C:\\Users\\User\\Yandex.Disk\\VKS Recordings\\KTalk",
+      "extensions": [".mp4", ".m4a"],
+      "move_mode": "wait_for_stable",
+      "delete_source_folder": true,
+      "delete_delay_seconds": 60,
+      "enabled": false
     }
   ]
 }

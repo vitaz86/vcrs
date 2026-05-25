@@ -19,16 +19,20 @@ On first launch, config and logs are stored in `~/.vcs_automover/`.
 ## Configuration
 
 - Rules are stored in `~/.vcs_automover/config.json`.
-- Sample `config.json` is included in this repository.
-- Rule fields:
-  - `name`
-  - `source_folder`
-  - `destination_folder`
-  - `extensions`
-  - `move_mode` (`wait_for_stable` or `immediate`)
-  - `delete_source_folder`
-  - `delete_delay_seconds`
-  - `enabled`
+- Sample config includes Zoom, Telemost, and Kontur Talk (`KTalk`) rules.
+- All default rules are disabled initially; enable needed ones in Settings.
+- Supported interface languages: English and Russian (switch in Settings).
+
+Rule fields:
+- `zoom_conversion_timeout_seconds` (global, default `1200` seconds for forced Zoom conversion launch)
+- `name`
+- `source_folder`
+- `destination_folder`
+- `extensions`
+- `move_mode` (`wait_for_stable` or `immediate`)
+- `delete_source_folder`
+- `delete_delay_seconds`
+- `enabled`
 
 ## Tray Menu
 
@@ -41,6 +45,8 @@ On first launch, config and logs are stored in `~/.vcs_automover/`.
 
 - Shows all rules in a table.
 - Add/Edit/Delete rules.
+- Double-click any rule row to open Edit.
+- Windows paths are shown with backslashes in UI fields for easy copy/paste.
 - Save writes config and restarts watchers immediately.
 - Includes startup registration toggle:
   - Windows: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`

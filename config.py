@@ -31,7 +31,7 @@ class WatcherRule:
             move_mode=str(data.get("move_mode", "wait_for_stable")),
             delete_source_folder=bool(data.get("delete_source_folder", True)),
             delete_delay_seconds=int(data.get("delete_delay_seconds", 60)),
-            enabled=bool(data.get("enabled", True)),
+            enabled=bool(data.get("enabled", False)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -42,26 +42,37 @@ class WatcherRule:
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "startup_enabled": False,
+    "language": "en",
     "rules": [
         {
             "name": "Zoom",
-            "source_folder": "C:/Users/User/Documents/Zoom",
-            "destination_folder": "C:/Users/User/Yandex.Disk/VKS Recordings/Zoom",
+            "source_folder": r"C:\Users\User\Documents\Zoom",
+            "destination_folder": r"C:\Users\User\Yandex.Disk\VKS Recordings\Zoom",
             "extensions": [".mp4", ".m4a"],
             "move_mode": "wait_for_stable",
             "delete_source_folder": True,
             "delete_delay_seconds": 60,
-            "enabled": True,
+            "enabled": False,
         },
         {
             "name": "Telemost",
-            "source_folder": "C:/Users/User/Documents/Telemost",
-            "destination_folder": "C:/Users/User/Yandex.Disk/VKS Recordings/Telemost",
+            "source_folder": r"C:\Users\User\Documents\Telemost",
+            "destination_folder": r"C:\Users\User\Yandex.Disk\VKS Recordings\Telemost",
             "extensions": [".webm"],
             "move_mode": "immediate",
             "delete_source_folder": True,
             "delete_delay_seconds": 60,
-            "enabled": True,
+            "enabled": False,
+        },
+        {
+            "name": "Kontur Talk",
+            "source_folder": r"C:\Users\User\Documents\KTalk",
+            "destination_folder": r"C:\Users\User\Yandex.Disk\VKS Recordings\KTalk",
+            "extensions": [".mp4", ".m4a"],
+            "move_mode": "wait_for_stable",
+            "delete_source_folder": True,
+            "delete_delay_seconds": 60,
+            "enabled": False,
         },
     ],
 }
@@ -82,6 +93,7 @@ def load_config() -> dict[str, Any]:
         data = json.load(f)
 
     data.setdefault("startup_enabled", False)
+    data.setdefault("language", "en")
     data.setdefault("rules", [])
     return data
 

@@ -4,8 +4,17 @@ import sys
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from urllib.parse import urlparse
 
-from config import CONFIG_PATH, LOG_DIR, WatcherRule, save_config
+from config import (
+    CONFIG_PATH,
+    LOG_DIR,
+    S3_UPLOAD_ROOT,
+    TRANSFER_TARGET_FOLDER,
+    TRANSFER_TARGET_S3,
+    TRANSFER_TARGETS,
+    save_config,
+)
 
 
 def _display_path(path: str) -> str:
@@ -14,6 +23,24 @@ def _display_path(path: str) -> str:
 
 def _store_path(path: str) -> str:
     return path.replace('\\', '/') if sys.platform.startswith('win') else path
+
+
+def _display_target(app_state, target: str) -> str:
+    if target == TRANSFER_TARGET_S3:
+        return app_state.t("target_s3")
+    return app_state.t("target_folder")
+
+
+def _display_destination(rule: dict) -> str:
+    if rule.get("transfer_target", TRANSFER_TARGET_FOLDER) == TRANSFER_TARGET_S3:
+        bucket = rule.get("s3_bucket_name", "")
+        return f"s3://{bucket}/{S3_UPLOAD_ROOT}" if bucket else "s3://"
+    return _display_path(rule.get("destination_folder", ""))
+
+
+def _is_valid_http_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def set_startup_enabled(enabled: bool) -> None:
@@ -65,6 +92,12 @@ class RuleDialog(tk.Toplevel):
             "name": tk.StringVar(value=(rule or {}).get("name", "")),
             "source_folder": tk.StringVar(value=_display_path((rule or {}).get("source_folder", ""))),
             "destination_folder": tk.StringVar(value=_display_path((rule or {}).get("destination_folder", ""))),
+            "transfer_target": tk.StringVar(value=(rule or {}).get("transfer_target", TRANSFER_TARGET_FOLDER)),
+            "s3_endpoint_url": tk.StringVar(value=(rule or {}).get("s3_endpoint_url", "")),
+            "s3_bucket_name": tk.StringVar(value=(rule or {}).get("s3_bucket_name", "")),
+            "s3_access_key": tk.StringVar(value=(rule or {}).get("s3_access_key", "")),
+            "s3_secret_key": tk.StringVar(value=(rule or {}).get("s3_secret_key", "")),
+            "s3_region": tk.StringVar(value=(rule or {}).get("s3_region", "us-east-1")),
             "extensions": tk.StringVar(value=", ".join((rule or {}).get("extensions", [".mp4"]))),
             "move_mode": tk.StringVar(value=(rule or {}).get("move_mode", "wait_for_stable")),
             "delete_source_folder": tk.BooleanVar(value=(rule or {}).get("delete_source_folder", True)),
@@ -78,11 +111,33 @@ class RuleDialog(tk.Toplevel):
     def _build_form(self) -> None:
         frame = ttk.Frame(self, padding=10)
         frame.grid(row=0, column=0, sticky="nsew")
-        rows = [("name_label", "name"), ("source_label", "source_folder"), ("destination_label", "destination_folder"), ("extensions_label", "extensions"), ("move_mode_label", "move_mode"), ("delete_delay_label", "delete_delay_seconds")]
+        rows = [
+            ("name_label", "name"),
+            ("source_label", "source_folder"),
+            ("transfer_target_label", "transfer_target"),
+            ("destination_label", "destination_folder"),
+            ("s3_endpoint_label", "s3_endpoint_url"),
+            ("s3_bucket_label", "s3_bucket_name"),
+            ("s3_access_key_label", "s3_access_key"),
+            ("s3_secret_key_label", "s3_secret_key"),
+            ("s3_region_label", "s3_region"),
+            ("extensions_label", "extensions"),
+            ("move_mode_label", "move_mode"),
+            ("delete_delay_label", "delete_delay_seconds"),
+        ]
         for idx, (label_key, key) in enumerate(rows):
             ttk.Label(frame, text=self.app_state.t(label_key)).grid(row=idx, column=0, sticky="w", pady=2)
             if key == "move_mode":
                 ttk.Combobox(frame, textvariable=self.vars[key], values=["wait_for_stable", "immediate"], state="readonly").grid(row=idx, column=1, sticky="ew", pady=2)
+            elif key == "transfer_target":
+                ttk.Combobox(
+                    frame,
+                    textvariable=self.vars[key],
+                    values=[TRANSFER_TARGET_FOLDER, TRANSFER_TARGET_S3],
+                    state="readonly",
+                ).grid(row=idx, column=1, sticky="ew", pady=2)
+            elif key == "s3_secret_key":
+                ttk.Entry(frame, textvariable=self.vars[key], width=50, show="*").grid(row=idx, column=1, sticky="ew", pady=2)
             else:
                 ttk.Entry(frame, textvariable=self.vars[key], width=50).grid(row=idx, column=1, sticky="ew", pady=2)
             if key in {"source_folder", "destination_folder"}:
@@ -102,20 +157,66 @@ class RuleDialog(tk.Toplevel):
     def _on_ok(self) -> None:
         try:
             exts = [ext.strip().lower() for ext in self.vars["extensions"].get().split(",") if ext.strip()]
+            transfer_target = self.vars["transfer_target"].get().strip().lower()
+            source_folder = _store_path(self.vars["source_folder"].get().strip())
+            destination_folder = _store_path(self.vars["destination_folder"].get().strip())
+            s3_endpoint_url = self.vars["s3_endpoint_url"].get().strip()
+            s3_bucket_name = self.vars["s3_bucket_name"].get().strip()
+            s3_access_key = self.vars["s3_access_key"].get().strip()
+            s3_secret_key = self.vars["s3_secret_key"].get()
+            s3_region = self.vars["s3_region"].get().strip() or "us-east-1"
+            try:
+                delete_delay_seconds = int(self.vars["delete_delay_seconds"].get())
+            except ValueError as exc:
+                raise ValueError(self.app_state.t("delay_error")) from exc
+            if delete_delay_seconds < 0:
+                raise ValueError(self.app_state.t("delay_error"))
+            if not exts:
+                raise ValueError(self.app_state.t("extensions_required"))
+            self._validate_rule(source_folder, destination_folder, transfer_target, s3_endpoint_url, s3_bucket_name, s3_access_key, s3_secret_key)
             self.result = {
                 "name": self.vars["name"].get().strip(),
-                "source_folder": _store_path(self.vars["source_folder"].get().strip()),
-                "destination_folder": _store_path(self.vars["destination_folder"].get().strip()),
+                "source_folder": source_folder,
+                "destination_folder": destination_folder,
+                "transfer_target": transfer_target,
+                "s3_endpoint_url": s3_endpoint_url,
+                "s3_bucket_name": s3_bucket_name,
+                "s3_access_key": s3_access_key,
+                "s3_secret_key": s3_secret_key,
+                "s3_region": s3_region,
                 "extensions": [e if e.startswith(".") else f".{e}" for e in exts],
                 "move_mode": self.vars["move_mode"].get(),
                 "delete_source_folder": bool(self.vars["delete_source_folder"].get()),
-                "delete_delay_seconds": int(self.vars["delete_delay_seconds"].get()),
+                "delete_delay_seconds": delete_delay_seconds,
                 "enabled": bool(self.vars["enabled"].get()),
             }
-        except ValueError:
-            messagebox.showerror(self.app_state.t("invalid_value"), self.app_state.t("delay_error"))
+        except ValueError as exc:
+            messagebox.showerror(self.app_state.t("invalid_value"), str(exc))
             return
         self.destroy()
+
+    def _validate_rule(
+        self,
+        source_folder: str,
+        destination_folder: str,
+        transfer_target: str,
+        s3_endpoint_url: str,
+        s3_bucket_name: str,
+        s3_access_key: str,
+        s3_secret_key: str,
+    ) -> None:
+        if not source_folder:
+            raise ValueError(self.app_state.t("source_required"))
+        if transfer_target not in TRANSFER_TARGETS:
+            raise ValueError(self.app_state.t("target_error"))
+        if transfer_target == TRANSFER_TARGET_FOLDER:
+            if not destination_folder:
+                raise ValueError(self.app_state.t("destination_required"))
+            return
+        if not s3_bucket_name or not s3_endpoint_url or not s3_access_key or not s3_secret_key:
+            raise ValueError(self.app_state.t("s3_required"))
+        if not _is_valid_http_url(s3_endpoint_url):
+            raise ValueError(self.app_state.t("s3_endpoint_error"))
 
 
 class SettingsWindow:
@@ -130,7 +231,7 @@ class SettingsWindow:
         self._load_rules()
 
     def _build_ui(self) -> None:
-        cols = ("name", "source", "destination", "extensions", "enabled")
+        cols = ("name", "source", "target", "destination", "extensions", "enabled")
         self.tree = ttk.Treeview(self.root, columns=cols, show="headings")
         for key in cols:
             self.tree.heading(key, text=self.app_state.t(key))
@@ -157,7 +258,20 @@ class SettingsWindow:
             self.tree.delete(row)
         yes, no = self.app_state.t("yes"), self.app_state.t("no")
         for idx, rule in enumerate(self.app_state.config.get("rules", [])):
-            self.tree.insert("", tk.END, iid=str(idx), values=(rule.get("name", ""), _display_path(rule.get("source_folder", "")), _display_path(rule.get("destination_folder", "")), ", ".join(rule.get("extensions", [])), yes if rule.get("enabled", False) else no))
+            target = rule.get("transfer_target", TRANSFER_TARGET_FOLDER)
+            self.tree.insert(
+                "",
+                tk.END,
+                iid=str(idx),
+                values=(
+                    rule.get("name", ""),
+                    _display_path(rule.get("source_folder", "")),
+                    _display_target(self.app_state, target),
+                    _display_destination(rule),
+                    ", ".join(rule.get("extensions", [])),
+                    yes if rule.get("enabled", False) else no,
+                ),
+            )
 
     def _add_rule(self) -> None:
         dialog = RuleDialog(self.root, self.app_state, "add_rule")

@@ -11,6 +11,9 @@ a = Analysis(
     hiddenimports=[
         "pystray._win32",
         "pystray._base",
+        "boto3",
+        "botocore",
+        "s3transfer",
     ],
     hookspath=[],
     hooksconfig={},
